@@ -5,100 +5,99 @@ from supabase import create_client
 import docx
 from PyPDF2 import PdfReader
 
-# --- CẤU HÌNH SUPABASE ---
-# (Lấy từ st.secrets hoặc điền trực tiếp để chạy trên máy)
+
+# =============================
+# CẤU HÌNH SUPABASE
+# =============================
+
 try:
     SUPABASE_URL = st.secrets["https://coljvrkxzihtsalsabhw.supabase.co"]
     SUPABASE_KEY = st.secrets["sb_publishable_13zNj8XyMESPmm-TUYvSng_Ov_Gi4z6"]
 except:
-    st.warning("Chưa cấu hình Secrets. Vui lòng nhập thông tin bên dưới.")
+    st.warning("Chưa cấu hình Secrets. Nhập tạm để test local.")
     SUPABASE_URL = st.text_input("Supabase URL")
     SUPABASE_KEY = st.text_input("Supabase Key", type="password")
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-BUCKET_NAME = "exam_images" # Tên bucket bạn đã tạo trong Supabase Storage
 
-# --- HÀM XỬ LÝ WORD ---
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+else:
+    supabase = None
+
+BUCKET_NAME = "exam_images"
+
+# =============================
+# HÀM XỬ LÝ FILE WORD
+# =============================
+
 def process_docx_file(uploaded_file):
     doc = docx.Document(uploaded_file)
-    
+
     questions = []
     current_q = None
-    
-    # Regex nhận diện
-    regex_question = re.compile(r'^(Câu\s+\d+[\.:])(.*)', re.IGNORECASE)
-    regex_option = re.compile(r'^([A-D][\.:])(.*)')
-    
     temp_opts = []
     current_img_blob = None
-    
+
+    regex_question = re.compile(r'^(Câu\s+\d+[\.:])(.*)', re.IGNORECASE)
+    regex_option = re.compile(r'^([A-D][\.:])(.*)')
+
     for para in doc.paragraphs:
         text = para.text.strip()
-        
-        # 1. Quét ảnh trong đoạn văn
+
+        # Quét ảnh
         for run in para.runs:
             if 'graphic' in run._element.xml:
-                blips = run._element.findall('.//{http://schemas.openxmlformats.org/drawingml/2006/main}blip')
+                blips = run._element.findall(
+                    './/{http://schemas.openxmlformats.org/drawingml/2006/main}blip'
+                )
                 for blip in blips:
-                    rId = blip.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed')
+                    rId = blip.get(
+                        '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed'
+                    )
                     if rId:
                         current_img_blob = doc.part.related_parts[rId].blob
-                        # Gán ngay nếu đang trong câu hỏi
-                        if current_q: 
-                            current_q['image_blob'] = current_img_blob
-                            current_img_blob = None # Reset sau khi gán
-        
-        # 2. Phân tích văn bản
-        if not text: continue
-            
+
+        if not text:
+            continue
+
         match_q = regex_question.match(text)
-        
-        # Phát hiện câu hỏi mới (VD: Câu 30...)
+
         if match_q:
-            # Lưu câu cũ lại trước khi sang câu mới
             if current_q:
                 current_q['options'] = temp_opts
-                # LOGIC QUAN TRỌNG: Nếu không tìm thấy options nào -> Đánh dấu là TỰ LUẬN
-                if len(temp_opts) == 0:
-                    current_q['type'] = 'essay'
-                else:
-                    current_q['type'] = 'mcq'
+                current_q['type'] = 'essay' if len(temp_opts) == 0 else 'mcq'
                 questions.append(current_q)
-            
-            # Khởi tạo câu mới
-            q_num_str = re.search(r'\d+', match_q.group(1)).group()
+
+            q_num = int(re.search(r'\d+', match_q.group(1)).group())
             q_content = match_q.group(2).strip()
-            
+
             current_q = {
-                "id": int(q_num_str),
+                "id": q_num,
                 "q": q_content,
                 "options": [],
-                "type": "mcq", # Mặc định là mcq, sẽ đổi thành essay nếu ko thấy A/B/C/D
+                "type": "mcq",
                 "correct": "",
-                "essay_answer": "", # Chỗ để điền đáp án tự luận
-                "image_blob": None
+                "essay_answer": "",
+                "image_blob": current_img_blob
             }
+
+            current_img_blob = None
             temp_opts = []
-            
-            if current_img_blob:
-                current_q['image_blob'] = current_img_blob
-                current_img_blob = None
-            
-        # Phát hiện đáp án A. B. C. D.
+
         elif regex_option.match(text):
             temp_opts.append(text)
-            
-    # Lưu câu cuối cùng
+
     if current_q:
         current_q['options'] = temp_opts
-        if len(temp_opts) == 0:
-            current_q['type'] = 'essay'
-        else:
-            current_q['type'] = 'mcq'
+        current_q['type'] = 'essay' if len(temp_opts) == 0 else 'mcq'
         questions.append(current_q)
-        
+
     return questions
 
-# --- GIAO DIỆN ---
+
+# =============================
+# GIAO DIỆN
+# =============================
+
 st.title("🤖 Admin: Quét Đề (Trắc nghiệm + Tự luận)")
 
 uploaded_file = st.file_uploader("Chọn file Word (.docx)")
@@ -107,89 +106,85 @@ if "questions" not in st.session_state:
     st.session_state.questions = []
 
 if uploaded_file and st.button("Phân tích File"):
-    st.session_state.questions = parse_docx(uploaded_file)
+    st.session_state.questions = process_docx_file(uploaded_file)
+
+# =============================
+# HIỂN THỊ CÂU HỎI
+# =============================
 
 if st.session_state.questions:
-    st.success(f"Tìm thấy {len(st.session_state.questions)} câu hỏi")
 
-    for item in st.session_state.questions:
-        st.text_area(
-            f"Câu {item['id']}",
-            key=f"question_{item['id']}"
-        )
-            
-            # Đếm số lượng
-            mcq_count = sum(1 for q in extracted_data if q['type'] == 'mcq')
-            essay_count = sum(1 for q in extracted_data if q['type'] == 'essay')
-            st.success(f"Tìm thấy: {mcq_count} câu Trắc nghiệm & {essay_count} câu Tự luận.")
+    data = st.session_state.questions
 
-if 'data_ready' in st.session_state:
-    data = st.session_state['data_ready']
-    
-with st.form("answer_form"):
+    mcq_count = sum(1 for q in data if q['type'] == 'mcq')
+    essay_count = sum(1 for q in data if q['type'] == 'essay')
 
-    for item in questions:
-        st.text_area(
-            f"Gợi ý trả lời câu {item['id']}",
-            key=f"essay_{item['id']}"
-        )
+    st.success(f"Tìm thấy: {mcq_count} câu Trắc nghiệm & {essay_count} câu Tự luận.")
 
-    submitted = st.form_submit_button("Lưu")
+    with st.form("save_form"):
 
-    if submitted:
-        st.success("Đã lưu dữ liệu")
-        
         for item in data:
+
             col_img, col_content = st.columns([1, 4])
-            
-            # Cột trái: Ảnh (nếu có)
+
             with col_img:
                 if item['image_blob']:
-                    st.image(item['image_blob'], caption="Hình minh họa", width=120)
+                    st.image(item['image_blob'], width=120)
                 else:
                     st.caption("Không ảnh")
 
-            # Cột phải: Nội dung
             with col_content:
-                # Phân biệt giao diện dựa trên loại câu hỏi
+
                 if item['type'] == 'mcq':
                     st.markdown(f"🔵 **Câu {item['id']} (Trắc nghiệm):** {item['q']}")
                     st.caption(f"Options: {item['options']}")
-                    # Chọn đáp án đúng cho MCQ
-                    item['correct'] = st.selectbox(f"Đáp án đúng câu {item['id']}", ["A", "B", "C", "D"], key=f"ans_{item['id']}")
+
+                    item['correct'] = st.selectbox(
+                        f"Đáp án đúng câu {item['id']}",
+                        ["A", "B", "C", "D"],
+                        key=f"ans_{item['id']}"
+                    )
+
                 else:
                     st.markdown(f"🟠 **Câu {item['id']} (Tự luận):** {item['q']}")
-                    # Nhập gợi ý trả lời cho Tự luận
-                    item['essay_answer'] = st.text_area(f"Gợi ý trả lời câu {item['id']}", placeholder="Nhập đáp án tự luận vào đây...", key=f"essay_{item['id']}")
-            
+
+                    item['essay_answer'] = st.text_area(
+                        f"Gợi ý trả lời câu {item['id']}",
+                        key=f"essay_{item['id']}"
+                    )
+
             st.divider()
-            
-        if st.form_submit_button("🚀 LƯU TẤT CẢ VÀO DATABASE"):
+
+        submit = st.form_submit_button("🚀 LƯU TẤT CẢ VÀO DATABASE")
+
+        if submit and supabase:
+
             progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            # Xóa dữ liệu cũ (Reset đề)
+            status = st.empty()
+
             supabase.table("exam_questions").delete().neq("id", 0).execute()
-            
+
             for i, item in enumerate(data):
-                status_text.text(f"Đang lưu câu {item['id']}...")
-                
+
+                status.text(f"Đang lưu câu {item['id']}...")
+
                 image_url = None
-                
-                # 1. Upload ảnh (nếu có)
+
                 if item['image_blob']:
                     try:
                         file_name = f"q_{item['id']}_{int(time.time())}.png"
-                        supabase.storage.from_(BUCKET_NAME).upload(
-                            path=file_name,
-                            file=item['image_blob'],
-                            file_options={"content-type": "image/png"}
-                        )
-                        image_url = supabase.storage.from_(BUCKET_NAME).get_public_url(file_name)
-                    except Exception as e:
-                        st.error(f"Lỗi ảnh câu {item['id']}: {e}")
 
-                # 2. Chuẩn bị dữ liệu JSON
+                        supabase.storage.from_(BUCKET_NAME).upload(
+                            file_name,
+                            item['image_blob'],
+                            {"content-type": "image/png"}
+                        )
+
+                        image_url = supabase.storage.from_(BUCKET_NAME).get_public_url(file_name)
+
+                    except Exception as e:
+                        st.error(f"Lỗi upload ảnh: {e}")
+
                 if item['type'] == 'mcq':
                     payload = {
                         "id": item['id'],
@@ -198,23 +193,21 @@ with st.form("answer_form"):
                         "correct_char": item['correct'],
                         "image_url": image_url
                     }
-                else: # essay
+                else:
                     payload = {
                         "id": item['id'],
                         "q": item['q'],
-                        "image_url": image_url,
-                        "answer": item['essay_answer'] # Lưu gợi ý trả lời
+                        "answer": item['essay_answer'],
+                        "image_url": image_url
                     }
-                
-                # 3. Insert vào DB
+
                 supabase.table("exam_questions").insert({
-                    "type": item['type'], 
+                    "type": item['type'],
                     "content": payload
                 }).execute()
-                
+
                 progress_bar.progress((i + 1) / len(data))
-                
-            status_text.success("✅ Hoàn tất! Đã lưu cả Trắc nghiệm và Tự luận.")
-            time.sleep(2)
-            del st.session_state['data_ready']
+
+            status.success("✅ Hoàn tất!")
+            time.sleep(1)
             st.rerun()
