@@ -8,8 +8,8 @@ from supabase import create_client
 st.set_page_config(page_title="Admin Quản lý đề", layout="wide")
 
 try:
-    SUPABASE_URL = st.secrets["https://coljvrkxzihtsalsabhw.supabase.co"]
-    SUPABASE_KEY = st.secrets["sb_publishable_13zNj8XyMESPmm-TUYvSng_Ov_Gi4z6"]
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 except:
     st.warning("Chưa cấu hình Secrets.")
     st.stop()
