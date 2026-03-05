@@ -1,5 +1,6 @@
 import streamlit as st
 import re
+import time
 from supabase import create_client
 import docx
 from PyPDF2 import PdfReader
@@ -13,153 +14,169 @@ except:
     st.warning("Chưa cấu hình Secrets. Vui lòng nhập thông tin bên dưới.")
     SUPABASE_URL = st.text_input("Supabase URL")
     SUPABASE_KEY = st.text_input("Supabase Key", type="password")
-
-if not SUPABASE_URL or not SUPABASE_KEY:
-    st.stop()
-
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+BUCKET_NAME = "exam_images" # Tên bucket bạn đã tạo trong Supabase Storage
 
-# --- HÀM ĐỌC FILE ---
-def extract_text_from_file(uploaded_file):
-    text = ""
-    if uploaded_file.name.endswith('.docx'):
-        doc = docx.Document(uploaded_file)
-        for para in doc.paragraphs:
-            text += para.text + "\n"
-    elif uploaded_file.name.endswith('.pdf'):
-        reader = PdfReader(uploaded_file)
-        for page in reader.pages:
-            text += page.extract_text() + "\n"
-    return text
-
-# --- HÀM PHÂN TÍCH ĐỀ THI (PARSER) ---
-def parse_exam_content(text):
-    """
-    Hàm này cực kỳ quan trọng:
-    Nó dùng Regular Expression (Regex) để tìm 'Câu 1.', 'A.', 'B.' và bảng đáp án.
-    """
-    questions_mcq = []
+# --- HÀM XỬ LÝ WORD & ẢNH ---
+def process_docx_file(uploaded_file):
+    doc = docx.Document(uploaded_file)
     
-    # 1. Tìm bảng đáp án (Thường nằm cuối, dạng: 1. A 2. B ...)
-    # Logic: Tìm chuỗi có dạng "1. [A-D]" lặp lại
-    answer_key = {}
-    # Tìm tất cả các mẫu "Số. Chữ cái" (VD: 1. A, 2. D)
-    key_matches = re.findall(r'(\d+)\s*[\.:]\s*([A-D])', text)
-    if key_matches:
-        for num, ans in key_matches:
-            answer_key[int(num)] = ans
-
-    # 2. Tách các câu hỏi Trắc nghiệm
-    # Regex tìm: "Câu [số]." theo sau là nội dung, đến khi gặp "Câu [số tiếp]"
-    # Pattern giải thích: 
-    # Câu \d+[\.:] : Bắt đầu bằng chữ Câu + số + dấu chấm hoặc 2 chấm
-    # (.*?) : Lấy nội dung ở giữa (non-greedy)
-    # (?=Câu \d+[\.:]|$|II\.) : Dừng lại khi gặp Câu tiếp theo HOẶC hết bài HOẶC gặp phần II. Tự luận
+    questions = []
+    current_q = None
     
-    # Chuẩn hóa văn bản một chút để dễ xử lý (xóa dòng trống thừa)
-    lines = [line.strip() for line in text.split('\n') if line.strip()]
-    clean_text = '\n'.join(lines)
-
-    # Tách khối trắc nghiệm (Thường từ đầu hoặc sau chứ I. TRẮC NGHIỆM)
-    mcq_section = clean_text
-    if "II. TỰ LUẬN" in clean_text:
-        mcq_section = clean_text.split("II. TỰ LUẬN")[0]
+    # Regex để tìm câu hỏi (VD: Câu 1., Câu 1:, Câu 01.)
+    # và Đáp án (A., B., C., D.)
+    regex_question = re.compile(r'^(Câu\s+\d+[\.:])(.*)', re.IGNORECASE)
+    regex_option = re.compile(r'^([A-D][\.:])(.*)')
     
-    # Tìm các câu hỏi
-    raw_questions = re.split(r'(Câu\s+\d+[\.:])', mcq_section)
+    # Biến tạm
+    temp_opts = []
+    current_img_blob = None # Lưu dữ liệu ảnh nhị phân
     
-    current_q = {}
-    
-    # raw_questions sẽ có dạng ['', 'Câu 1.', 'Nội dung...', 'Câu 2.', 'Nội dung...']
-    for i in range(1, len(raw_questions), 2):
-        q_label = raw_questions[i].strip() # VD: Câu 1.
-        q_content_full = raw_questions[i+1].strip() # Nội dung câu hỏi và đáp án
+    # Duyệt qua từng đoạn văn (paragraph) trong Word
+    for para in doc.paragraphs:
+        text = para.text.strip()
         
-        # Lấy số câu
-        q_num = int(re.search(r'\d+', q_label).group())
+        # 1. Kiểm tra xem đoạn này có chứa ảnh không
+        # Duyệt qua các "runs" (thành phần con của đoạn)
+        for run in para.runs:
+            # Tìm thẻ xml hình ảnh trong run
+            if 'graphic' in run._element.xml:
+                # Tìm rId (Relationship ID) của ảnh
+                # Đây là kỹ thuật "đào" vào XML của Word
+                blips = run._element.findall('.//{http://schemas.openxmlformats.org/drawingml/2006/main}blip')
+                for blip in blips:
+                    rId = blip.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed')
+                    if rId:
+                        # Lấy dữ liệu ảnh từ rId
+                        image_part = doc.part.related_parts[rId]
+                        current_img_blob = image_part.blob
+                        # Gán ảnh này cho câu hỏi hiện tại (nếu đang xử lý dở)
+                        if current_q:
+                            current_q['image_blob'] = current_img_blob
         
-        # Tách nội dung câu hỏi và các đáp án A, B, C, D
-        # Tìm vị trí của A. B. C. D.
-        # Lưu ý: Regex này giả định đáp án có dạng "A. " (A chấm cách)
-        opts_matches = re.split(r'([A-D][\.:])', q_content_full)
-        
-        if len(opts_matches) >= 9: # Phải có ít nhất Question + 4 labels + 4 contents
-            q_text = opts_matches[0].strip()
-            options = []
-            # opts_matches[1] là "A.", opts_matches[2] là nội dung A...
-            options.append(opts_matches[1] + " " + opts_matches[2].strip())
-            options.append(opts_matches[3] + " " + opts_matches[4].strip())
-            options.append(opts_matches[5] + " " + opts_matches[6].strip())
-            options.append(opts_matches[7] + " " + opts_matches[8].strip())
+        # 2. Phân tích văn bản
+        if not text:
+            continue
             
-            # Lấy đáp án đúng từ bảng đáp án đã quét ở trên
-            correct_char = answer_key.get(q_num, "?") # Mặc định ? nếu không tìm thấy
+        # Nếu dòng bắt đầu bằng "Câu X..."
+        match_q = regex_question.match(text)
+        if match_q:
+            # Lưu câu hỏi trước đó lại (nếu có)
+            if current_q:
+                current_q['options'] = temp_opts
+                questions.append(current_q)
             
-            questions_mcq.append({
-                "id": q_num,
-                "q": q_text,
-                "options": options,
-                "correct_char": correct_char
-            })
-
-    return questions_mcq, answer_key
+            # Tạo câu hỏi mới
+            q_num_str = re.search(r'\d+', match_q.group(1)).group()
+            q_content = match_q.group(2).strip()
+            
+            current_q = {
+                "id": int(q_num_str),
+                "q": q_content,
+                "options": [],
+                "correct_char": "?", # Sẽ tìm sau hoặc nhập tay
+                "image_blob": None   # Chờ ảnh (nếu có)
+            }
+            temp_opts = [] # Reset đáp án
+            
+            # Nếu vừa tìm thấy ảnh ở dòng trên hoặc ngay dòng này, gán luôn
+            if current_img_blob:
+                current_q['image_blob'] = current_img_blob
+                current_img_blob = None # Reset ảnh sau khi đã gán
+            
+        # Nếu dòng bắt đầu bằng "A.", "B."...
+        elif regex_option.match(text):
+            temp_opts.append(text)
+            
+    # Lưu câu cuối cùng
+    if current_q:
+        current_q['options'] = temp_opts
+        questions.append(current_q)
+        
+    return questions
 
 # --- GIAO DIỆN ADMIN ---
-st.title("🛠️ Admin: Nạp đề thi từ File")
-st.warning("Trang này chỉ dành cho giáo viên.")
+st.title("🤖 Admin: Tự động quét Ảnh & Câu hỏi")
 
-uploaded_file = st.file_uploader("Chọn file đề thi (.docx hoặc .pdf)", type=['docx', 'pdf'])
+uploaded_file = st.file_uploader("Chọn file Word (.docx)", type=['docx'])
 
 if uploaded_file:
-    # 1. Đọc text
-    raw_text = extract_text_from_file(uploaded_file)
-    
-    with st.expander("Xem nội dung thô trích xuất được"):
-        st.text(raw_text)
+    if st.button("Phân tích File"):
+        with st.spinner("Đang đọc file và tách ảnh..."):
+            extracted_data = process_docx_file(uploaded_file)
+            st.session_state['data_ready'] = extracted_data
+            st.success(f"Đã tìm thấy {len(extracted_data)} câu hỏi.")
 
-    # 2. Phân tích
-    if st.button("Phân tích đề thi"):
-        mcq_list, detected_keys = parse_exam_content(raw_text)
-        
-        st.success(f"Đã tìm thấy {len(mcq_list)} câu trắc nghiệm.")
-        st.info(f"Đã quét được đáp án: {detected_keys}")
-        
-        # Lưu tạm vào session để review trước khi up
-        st.session_state['preview_data'] = mcq_list
-
-if 'preview_data' in st.session_state:
-    st.subheader("Kiểm tra dữ liệu trước khi lưu")
+if 'data_ready' in st.session_state:
+    data = st.session_state['data_ready']
     
-    # Hiển thị dạng bảng để check
-    for item in st.session_state['preview_data']:
-        col1, col2 = st.columns([4, 1])
-        with col1:
-            st.write(f"**Câu {item['id']}:** {item['q']}")
-            st.caption(f"Options: {item['options']}")
-        with col2:
-            st.write(f"Đ.Án: **{item['correct_char']}**")
-            
-    # Nút lưu
-    if st.button("LƯU VÀO SUPABASE 🚀"):
-        # Xóa dữ liệu cũ (Tùy chọn)
-        supabase.table("exam_questions").delete().neq("id", 0).execute()
+    with st.form("confirm_form"):
+        st.subheader("Kiểm tra dữ liệu")
         
-        # Chuẩn bị data
-        data_to_insert = []
-        for item in st.session_state['preview_data']:
-            # Chuyển đổi sang format JSON của bảng
-            payload = {
-                "id": item['id'],
-                "q": item['q'],
-                "options": item['options'],
-                "correct_char": item['correct_char']
-            }
-            data_to_insert.append({"type": "mcq", "content": payload})
+        # Hiển thị danh sách để giáo viên check
+        for item in data:
+            col1, col2 = st.columns([1, 4])
+            with col1:
+                st.write(f"**Câu {item['id']}**")
+                # Nếu có ảnh (dạng blob), hiển thị ra để check
+                if item['image_blob']:
+                    st.image(item['image_blob'], width=100, caption="Ảnh tìm thấy")
+                else:
+                    st.caption("Không có ảnh")
+            with col2:
+                # Cho phép sửa nội dung nếu parser đọc sai
+                new_q = st.text_input(f"Nội dung câu {item['id']}", item['q'])
+                item['q'] = new_q
+                
+                # Cho phép chọn đáp án đúng
+                item['correct_char'] = st.selectbox(f"Đáp án đúng câu {item['id']}", ["A", "B", "C", "D"], key=f"ans_{item['id']}")
             
-        # Insert
-        try:
-            supabase.table("exam_questions").insert(data_to_insert).execute()
-            st.success("Đã nạp dữ liệu thành công! Hãy mở App thi để kiểm tra.")
-            del st.session_state['preview_data'] # Xóa cache
-        except Exception as e:
-            st.error(f"Lỗi khi lưu: {e}")
+            st.divider()
+            
+        if st.form_submit_button("LƯU TẤT CẢ VÀO DATABASE"):
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            # Xóa dữ liệu cũ (Tùy chọn)
+            # supabase.table("exam_questions").delete().neq("id", 0).execute()
+            
+            for i, item in enumerate(data):
+                status_text.text(f"Đang xử lý câu {item['id']}...")
+                
+                image_url = None
+                
+                # 1. Nếu có ảnh, Upload lên Supabase Storage
+                if item['image_blob']:
+                    try:
+                        file_name = f"auto_q_{item['id']}_{int(time.time())}.png"
+                        supabase.storage.from_(BUCKET_NAME).upload(
+                            path=file_name,
+                            file=item['image_blob'],
+                            file_options={"content-type": "image/png"}
+                        )
+                        # Lấy Public URL
+                        image_url = supabase.storage.from_(BUCKET_NAME).get_public_url(file_name)
+                    except Exception as e:
+                        st.error(f"Lỗi upload ảnh câu {item['id']}: {e}")
+
+                # 2. Lưu vào Database
+                payload = {
+                    "id": item['id'],
+                    "q": item['q'],
+                    "options": item['options'],
+                    "correct_char": item['correct_char'],
+                    "image_url": image_url # Link ảnh từ Supabase
+                }
+                
+                supabase.table("exam_questions").insert({
+                    "type": "mcq", 
+                    "content": payload
+                }).execute()
+                
+                progress_bar.progress((i + 1) / len(data))
+                
+            status_text.success("✅ Hoàn tất! Đã lưu toàn bộ câu hỏi và ảnh.")
+            time.sleep(2)
+            del st.session_state['data_ready']
+            st.rerun()
