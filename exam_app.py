@@ -7,8 +7,8 @@ st.set_page_config(page_title="Thi Tin học 6", layout="wide", initial_sidebar_
 st.markdown("""<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}</style>""", unsafe_allow_html=True)
 
 try:
-    SUPABASE_URL = st.secrets["SUPABASE_URL"]
-    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+    SUPABASE_URL = st.secrets["https://coljvrkxzihtsalsabhw.supabase.co"]
+    SUPABASE_KEY = st.secrets["sb_publishable_13zNj8XyMESPmm-TUYvSng_Ov_Gi4z6"]
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 except:
     st.error("Lỗi kết nối Database.")
