@@ -1,6 +1,8 @@
 import streamlit as st
 import re
 from supabase import create_client
+from supabase import create_client
+from dotenv import load_dotenv
 import docx
 from PyPDF2 import PdfReader
 
