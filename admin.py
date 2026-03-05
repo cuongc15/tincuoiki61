@@ -1,22 +1,18 @@
 import streamlit as st
+import docx
 import re
 import time
 from supabase import create_client
-import docx
-from PyPDF2 import PdfReader
 
-
-# =============================
-# CẤU HÌNH SUPABASE
-# =============================
+# --- CẤU HÌNH ---
+st.set_page_config(page_title="Admin Quản lý đề", layout="wide")
 
 try:
     SUPABASE_URL = st.secrets["https://coljvrkxzihtsalsabhw.supabase.co"]
     SUPABASE_KEY = st.secrets["sb_publishable_13zNj8XyMESPmm-TUYvSng_Ov_Gi4z6"]
 except:
-    st.warning("Chưa cấu hình Secrets. Nhập tạm để test local.")
-    SUPABASE_URL = st.text_input("Supabase URL")
-    SUPABASE_KEY = st.text_input("Supabase Key", type="password")
+    st.warning("Chưa cấu hình Secrets.")
+    st.stop()
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 BUCKET_NAME = "exam_images"
