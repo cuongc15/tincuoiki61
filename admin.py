@@ -9,7 +9,7 @@ st.set_page_config(page_title="Admin Quản lý đề", layout="wide")
 
 try:
     SUPABASE_URL = st.secrets["https://coljvrkxzihtsalsabhw.supabase.co"]
-    SUPABASE_KEY = st.secrets["sb_publishable_13zNj8XyMESPmm-TUYvSng_Ov_Gi4z6"]
+    SUPABASE_KEY = st.secrets["eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNvbGp2cmt4emlodHNhbHNhYmh3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1ODAwOTAsImV4cCI6MjA4ODE1NjA5MH0.hAG4oRJrXu7mA7wq8Otcg-W8KEecgg5Xa1kv98fzsTc"]
 except:
     st.warning("Chưa cấu hình Secrets.")
     st.stop()
