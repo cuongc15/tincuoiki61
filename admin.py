@@ -117,8 +117,18 @@ if uploaded_file:
 if 'data_ready' in st.session_state:
     data = st.session_state['data_ready']
     
-    with st.form("confirm_form"):
-        st.subheader("Kiểm tra & Nhập đáp án")
+with st.form("answer_form"):
+
+    for item in questions:
+        st.text_area(
+            f"Gợi ý trả lời câu {item['id']}",
+            key=f"essay_{item['id']}"
+        )
+
+    submitted = st.form_submit_button("Lưu")
+
+    if submitted:
+        st.success("Đã lưu dữ liệu")
         
         for item in data:
             col_img, col_content = st.columns([1, 4])
