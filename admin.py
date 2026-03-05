@@ -101,13 +101,22 @@ def process_docx_file(uploaded_file):
 # --- GIAO DIỆN ---
 st.title("🤖 Admin: Quét Đề (Trắc nghiệm + Tự luận)")
 
-uploaded_file = st.file_uploader("Chọn file Word (.docx)", type=['docx'])
+uploaded_file = st.file_uploader("Chọn file Word (.docx)")
 
-if uploaded_file:
-    if st.button("Phân tích File"):
-        with st.spinner("Đang tách câu hỏi và ảnh..."):
-            extracted_data = process_docx_file(uploaded_file)
-            st.session_state['data_ready'] = extracted_data
+if "questions" not in st.session_state:
+    st.session_state.questions = []
+
+if uploaded_file and st.button("Phân tích File"):
+    st.session_state.questions = parse_docx(uploaded_file)
+
+if st.session_state.questions:
+    st.success(f"Tìm thấy {len(st.session_state.questions)} câu hỏi")
+
+    for item in st.session_state.questions:
+        st.text_area(
+            f"Câu {item['id']}",
+            key=f"question_{item['id']}"
+        )
             
             # Đếm số lượng
             mcq_count = sum(1 for q in extracted_data if q['type'] == 'mcq')
